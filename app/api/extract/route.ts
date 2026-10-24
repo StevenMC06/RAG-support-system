@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { downloadFromS3 } from "@/lib/s3";
 import { PDFParse } from "pdf-parse";
 import { chunkText } from "@/lib/chunkTest";
+import { createEmbeddings } from "@/lib/embeddings";
 
 export async function POST(request: Request) {
     const body = await request.json();
@@ -53,14 +54,25 @@ export async function POST(request: Request) {
     await parser.destroy();
 
 
-    // chunk the text into 500 token chunks await response
-
     const chunks = chunkText(result.text, {
         targetTokens: 500,
         maxTokens: 600,
         overlapTokens: 75,
     });
 
+    if (chunks.length === 0) {
+        throw new Error("No chunks were generated");
+    }
+    
+    const embeddings = await createEmbeddings(
+        chunks.map((chunk) => chunk.content)
+    );
+    
+    if (embeddings.length !== chunks.length) {
+        throw new Error(
+            `Expected ${chunks.length} embeddings, received ${embeddings.length}`
+        );
+    }
 
     // delete the existing chunks if old
     await prisma.documentChunk.deleteMany({
@@ -71,32 +83,54 @@ export async function POST(request: Request) {
 
     // create the chunks in the database
     await prisma.documentChunk.createMany({
-        data: chunks.map((chunk, index) => ({
+        data: chunks.map((chunk) => ({
             documentId: document.id,
-            chunkIndex: index,
+            chunkIndex: chunk.chunkIndex,
             content: chunk.content,
             tokenCount: chunk.tokenCount,
         })),
-    })
-
-    // update the document status to processed
-    await prisma.document.update({
-        where: {
-            id: document.id,
-        },
-        data: {
-            status: "processed",
-        },
     });
 
-    // return the success response
+    const values = chunks.map((chunk, i) => {
+        const embedding = `[${embeddings[i].join(",")}]`;
+    
+        return `(${document.id}, ${chunk.chunkIndex}, '${embedding}'::vector)`;
+    });
+    
+    const valuesSql = values.join(",");
+    
+    await prisma.$executeRawUnsafe(`
+        UPDATE "DocumentChunk" AS dc
+        SET "embedding" = updates.embedding
+        FROM (
+            VALUES ${valuesSql}
+        ) AS updates("documentId", "chunkIndex", embedding)
+        WHERE dc."documentId" = updates."documentId"
+          AND dc."chunkIndex" = updates."chunkIndex";
+    `);
+
+    // persist each embedding
+    let updatedEmbeddings = 0;
+
+    for (let i = 0; i < chunks.length; i++) {
+        const embedding = `[${embeddings[i].join(",")}]`;
+
+        const updated = await prisma.$executeRaw`
+            UPDATE "DocumentChunk"
+            SET "embedding" = ${embedding}::vector
+            WHERE "documentId" = ${document.id}
+            AND "chunkIndex" = ${chunks[i].chunkIndex}
+        `;
+
+        updatedEmbeddings += updated;
+    }
+
     return Response.json({
         success: true,
         documentId: document.id,
-        filename: document.filename,
-        downloadedBytes: pdfBuffer.length,
-        extractedCharacters: result.text.length,
         chunkCount: chunks.length,
-        chunks: chunks.slice(0, 3),
+        embeddingCount: embeddings.length,
+        embeddingDimensions: embeddings[0]?.length ?? 0,
+        updatedEmbeddings,
     });
 }
