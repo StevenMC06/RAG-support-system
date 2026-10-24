@@ -208,6 +208,20 @@ export function chunkText(
                 overlapTokens
             );
 
+            // A unit may be as large as maxTokens on its own, so the overlap
+            // carried forward can push the next chunk over the ceiling. Drop
+            // the oldest overlap units until the incoming unit fits.
+            while (
+                currentUnits.length > 0 &&
+                countTokens(
+                    [...currentUnits, unit]
+                        .map((currentUnit) => currentUnit.text)
+                        .join("\n\n")
+                ) > maxTokens
+            ) {
+                currentUnits.shift();
+            }
+
             currentTokenCount = countTokens(
                 currentUnits
                     .map((currentUnit) => currentUnit.text)

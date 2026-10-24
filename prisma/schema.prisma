@@ -33,6 +33,8 @@ model DocumentChunk {
   tokenCount Int
   createdAt  DateTime @default(now())
 
+  embedding Unsupported("vector(1536)")?
+
   document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
   @@unique([documentId, chunkIndex])
