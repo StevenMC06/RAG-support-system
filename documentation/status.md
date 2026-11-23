@@ -5,7 +5,9 @@
 Source inspection confirms embedding persistence, vector retrieval, and cited
 chat are implemented. Search/chat request and call timing is now implemented;
 see [request timing](operations/request-timing.md) and the
-[platform roadmap](architecture/platform-roadmap.md). These are code/test
+[platform roadmap](architecture/platform-roadmap.md). Optional streaming chat,
+first-text/token-usage metrics, and browser Stop/incomplete-answer handling are
+implemented; see [streaming chat](operations/streaming-chat.md). These are code/test
 observations, not live provider/database verification. The older milestone and
 checklist below are historical and superseded where they conflict with this
 update. Ingestion still has duplicate vector writes and nontransactional

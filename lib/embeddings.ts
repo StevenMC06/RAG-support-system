@@ -13,7 +13,7 @@ export async function createEmbeddings(
         model: "text-embedding-3-small",
         input: texts,
         encoding_format: "float",
-    }), (result) => ({ providerRequestId: result._request_id ?? undefined }));
+    }), (result) => ({ providerRequestId: result._request_id ?? undefined, inputTokens: result.usage?.prompt_tokens }));
 
     return response.data.map((item) => item.embedding);
 }

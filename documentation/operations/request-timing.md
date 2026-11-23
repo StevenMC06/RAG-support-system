@@ -31,8 +31,10 @@ Events include UTC `startedAt`/`endedAt`, monotonic `durationMs`, and a
 success/failure outcome. Request events include `httpStatus`; HTTP 4xx/5xx are
 failures. Nested durations overlap and must not be summed. Model timings cover
 the SDK call, including any SDK retries, not individual HTTP attempts. Request
-time ends when the server constructs the response, not when the client receives
-it. Streaming and client round-trip metrics are not implemented.
+time for ordinary JSON requests ends when the server constructs the response.
+Streaming requests use an explicit lifecycle through stream completion or
+cancellation; see [streaming chat](streaming-chat.md) for first-text, usage, and
+browser measurements. Neither server metric includes the entire network round trip.
 
 `lib/telemetry.ts` exposes `timeOperation` for future tools:
 

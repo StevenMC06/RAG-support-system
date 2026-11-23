@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
-export type TraceContext = { requestId: string; callId: string };
-type Operation =
+export type TraceContext = Readonly<{ requestId: string; callId: string }>;
+export type Operation =
   | { kind: "request"; name: string }
   | { kind: "internal"; name: string }
   | { kind: "model"; name: string; provider: string; model: string }
@@ -83,7 +83,16 @@ function failureMetadata(error: unknown, operation: Operation): FailureMetadata 
   }
 }
 
-export type TimingEvent = Operation & ProviderMetadata & FailureMetadata & {
+export type OperationMetadata = ProviderMetadata & {
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  httpStatus?: number;
+};
+
+export type OperationOutcome = "success" | "failure" | "cancelled";
+
+export type TimingEvent = Operation & OperationMetadata & FailureMetadata & {
   event: "operation.completed";
   requestId: string;
   callId: string;
@@ -91,52 +100,96 @@ export type TimingEvent = Operation & ProviderMetadata & FailureMetadata & {
   startedAt: string;
   endedAt: string;
   durationMs: number;
-  outcome: "success" | "failure";
-  httpStatus?: number;
+  firstTextMs?: number;
+  outcome: OperationOutcome;
 };
+
+function validTokenCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+// Explicit lifetime for streaming operations. Constructing a Response does not
+// complete its body, so its caller finishes this span after consumption ends.
+export function startOperation(parent: TraceContext | undefined, operation: Operation) {
+  const context: TraceContext = Object.freeze({
+    requestId: parent?.requestId ?? randomUUID(),
+    callId: randomUUID(),
+  });
+  const parentId = parent?.callId;
+  const descriptor = { ...operation };
+  const startedAt = new Date().toISOString();
+  const start = performance.now();
+  let finished = false;
+  let firstTextMs: number | undefined;
+  const details: OperationMetadata = {};
+
+  function update(metadata: OperationMetadata) {
+    if (finished) return;
+    try {
+      for (const key of ["providerRequestId", "providerResponseId"] as const) {
+        const value = metadata[key];
+        if (typeof value === "string" && value.length > 0 && value.length <= 256) details[key] = value;
+      }
+      for (const key of ["inputTokens", "outputTokens", "cachedInputTokens"] as const) {
+        const value = metadata[key];
+        if (validTokenCount(value)) details[key] = value;
+      }
+      const status = metadata.httpStatus;
+      if (typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599) {
+        details.httpStatus = status;
+      }
+    } catch { /* Best effort metadata must never affect the application. */ }
+  }
+
+  function markFirstText() {
+    if (!finished && firstTextMs === undefined) firstTextMs = performance.now() - start;
+  }
+
+  function finish(outcome: OperationOutcome, options?: { httpStatus?: number; error?: unknown }) {
+    if (finished) return;
+    if (options?.httpStatus !== undefined) update({ httpStatus: options.httpStatus });
+    finished = true;
+    try {
+      const diagnostics = outcome === "failure" && options?.error !== undefined
+        ? failureMetadata(options.error, descriptor) : {};
+      const event: TimingEvent = {
+        ...descriptor,
+        event: "operation.completed",
+        ...context,
+        parentId,
+        startedAt,
+        endedAt: new Date().toISOString(),
+        durationMs: performance.now() - start,
+        firstTextMs,
+        outcome,
+        ...details,
+        ...diagnostics,
+      };
+      console.info(JSON.stringify(event));
+    } catch { /* Logging must never break requests. */ }
+  }
+
+  return Object.freeze({ context, markFirstText, update, finish });
+}
 
 // Only allowlisted metadata is exported; never serialize inputs or errors.
 export async function timeOperation<T>(
   parent: TraceContext | undefined,
   operation: Operation,
   run: (context: TraceContext) => Promise<T>,
-  metadata?: (result: T) => ProviderMetadata & { httpStatus?: number },
+  metadata?: (result: T) => OperationMetadata,
 ): Promise<T> {
-  const context = { requestId: parent?.requestId ?? randomUUID(), callId: randomUUID() };
-  const startedAt = new Date().toISOString();
-  const start = performance.now();
-  let outcome: TimingEvent["outcome"] = "failure";
-  let details: ProviderMetadata & FailureMetadata & { httpStatus?: number } = {};
+  const span = startOperation(parent, operation);
   try {
-    const result = await run(context);
-    outcome = "success";
-    // A telemetry metadata failure must not change the operation result.
+    const result = await run(span.context);
+    let details: OperationMetadata = {};
     try { details = metadata?.(result) ?? {}; } catch { /* best effort */ }
-    if (details.httpStatus !== undefined && details.httpStatus >= 400) outcome = "failure";
+    span.update(details);
+    span.finish(details.httpStatus !== undefined && details.httpStatus >= 400 ? "failure" : "success");
     return result;
   } catch (error) {
-    details = failureMetadata(error, operation);
+    span.finish("failure", { error });
     throw error;
-  } finally {
-    try {
-      const event: TimingEvent = {
-        ...operation,
-        event: "operation.completed",
-        ...context,
-        parentId: parent?.callId,
-        startedAt,
-        endedAt: new Date().toISOString(),
-        durationMs: performance.now() - start,
-        outcome,
-        providerRequestId: details.providerRequestId,
-        providerResponseId: details.providerResponseId,
-        httpStatus: details.httpStatus,
-        errorCategory: details.errorCategory,
-        errorCode: details.errorCode,
-        providerStatus: details.providerStatus,
-      };
-      console.info(JSON.stringify(event));
-    } catch { /* Logging must never break requests. */ }
   }
 }
 

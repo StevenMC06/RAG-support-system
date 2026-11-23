@@ -21,8 +21,11 @@ documentation/
 
 **Start here depending on what you need:**
 
+- Streaming feature PR handoff → [review handoff](handoffs/streaming-chat.md)
+
 - Planned local-first platform and feature sequence → [platform roadmap](architecture/platform-roadmap.md)
 - Implemented request/call IDs and timing → [request timing](operations/request-timing.md)
+- Streaming API, browser behavior, and measurements → [streaming chat](operations/streaming-chat.md)
 
 - Understand the current state and what to do next → [status.md](status.md)
 - Understand how the system works → [architecture/system-overview.md](architecture/system-overview.md)

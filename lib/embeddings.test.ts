@@ -18,10 +18,10 @@ describe("embedding call telemetry", () => {
 
   it("propagates context and provider request ID without logging input", async () => {
     const log = vi.spyOn(console, "info").mockImplementation(() => {});
-    create.mockResolvedValue({ data: [{ embedding: [1, 2] }], _request_id: "provider-id" });
+    create.mockResolvedValue({ data: [{ embedding: [1, 2] }], _request_id: "provider-id", usage: { prompt_tokens: 4, total_tokens: 4 } });
     await expect(createEmbeddings(["private text"], { requestId: "request", callId: "parent" })).resolves.toEqual([[1, 2]]);
     const event = JSON.parse(log.mock.calls[0][0]);
-    expect(event).toMatchObject({ requestId: "request", parentId: "parent", providerRequestId: "provider-id", model: "text-embedding-3-small", outcome: "success" });
+    expect(event).toMatchObject({ requestId: "request", parentId: "parent", providerRequestId: "provider-id", model: "text-embedding-3-small", outcome: "success", inputTokens: 4 });
     expect(log.mock.calls[0][0]).not.toContain("private text");
   });
 

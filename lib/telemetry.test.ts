@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { timeOperation, timeRequest, type TimingEvent } from "./telemetry";
+import { startOperation, timeOperation, timeRequest, type TimingEvent } from "./telemetry";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -107,4 +107,71 @@ describe("request and call timing", () => {
     expect(events[1].errorCategory).toBe("unknown");
   });
 
+});
+
+
+describe("stream operation lifecycle", () => {
+  it("records first text once and finishes only after consumption ends", () => {
+    const events = capture();
+    let now = 20;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const span = startOperation(undefined, { kind: "model", name: "answer.generate", provider: "openai", model: "test" });
+    now = 50;
+    span.markFirstText();
+    now = 80;
+    span.markFirstText();
+    span.update({ inputTokens: 120, outputTokens: 30, cachedInputTokens: 0, providerRequestId: "req_test" });
+    expect(events).toHaveLength(0);
+    now = 200;
+    span.finish("success");
+    expect(events[0]).toMatchObject({ durationMs: 180, firstTextMs: 30, inputTokens: 120, outputTokens: 30, cachedInputTokens: 0, providerRequestId: "req_test" });
+    span.finish("failure", { error: new Error("late") });
+    expect(events).toHaveLength(1);
+  });
+
+  it("keeps missing or invalid usage unknown and ignores updates after cancellation", () => {
+    const events = capture();
+    const span = startOperation(undefined, { kind: "request", name: "chat" });
+    span.update({ inputTokens: -1, outputTokens: Number.NaN, cachedInputTokens: 1.5 });
+    span.finish("cancelled", { httpStatus: 200 });
+    span.update({ outputTokens: 20 });
+    span.markFirstText();
+    span.finish("success");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ outcome: "cancelled", httpStatus: 200 });
+    expect(events[0]).not.toHaveProperty("firstTextMs");
+    expect(events[0]).not.toHaveProperty("inputTokens");
+    expect(events[0]).not.toHaveProperty("outputTokens");
+    expect(events[0]).not.toHaveProperty("cachedInputTokens");
+  });
+
+  it("keeps IDs immutable and snapshots parent identity", () => {
+    const events = capture();
+    const parent = { requestId: "request", callId: "parent" };
+    const span = startOperation(parent, { kind: "internal", name: "retrieval" });
+    parent.requestId = "changed";
+    parent.callId = "changed";
+    expect(Object.isFrozen(span.context)).toBe(true);
+    span.update({ requestId: "untrusted", content: "private" } as never);
+    span.finish("success");
+    expect(events[0]).toMatchObject({ requestId: "request", parentId: "parent" });
+    expect(JSON.stringify(events)).not.toContain("private");
+  });
+
+  it("preserves safe error metadata when an already-started stream fails", () => {
+    const events = capture();
+    const span = startOperation(undefined, { kind: "model", name: "answer.generate", provider: "openai", model: "test" });
+    span.markFirstText();
+    span.finish("failure", { httpStatus: 200, error: { status: 429, code: "rate_limit_exceeded", requestID: "req_failed", message: "private" } });
+    expect(events[0]).toMatchObject({ outcome: "failure", httpStatus: 200, errorCategory: "provider_rate_limit", errorCode: "rate_limit_exceeded", providerRequestId: "req_failed" });
+    expect(events[0]).toHaveProperty("firstTextMs");
+    expect(JSON.stringify(events)).not.toContain("private");
+  });
+
+  it("supports usage in nonstreaming operations without logging payloads", async () => {
+    const events = capture();
+    await timeOperation(undefined, { kind: "model", name: "generate", provider: "local", model: "test" }, async () => ({ input: 20, output: 10, text: "private" }), result => ({ inputTokens: result.input, outputTokens: result.output }));
+    expect(events[0]).toMatchObject({ inputTokens: 20, outputTokens: 10 });
+    expect(JSON.stringify(events)).not.toContain("private");
+  });
 });

@@ -1,50 +1,117 @@
 
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { Citation } from "@/lib/chat-events";
+import { consumeChatStream } from "@/lib/chat-stream-client";
 
-type Citation = {
-  documentId: number;
-  chunkIndex: number;
-  distance: number;
+type BrowserRequest = {
+  controller: AbortController;
+  startedAt: number;
+  requestId: string | null;
+  firstTextMs?: number;
+  paintFrame?: number;
+  settled?: boolean;
 };
+
+function logTiming(metadata: Record<string, string | number | undefined | null>) {
+  try { console.info(JSON.stringify({ event: "browser.chat", ...metadata })); } catch { /* best effort */ }
+}
 
 export default function Home() {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [citations, setCitations] = useState<Citation[]>([]);
   const [loading, setLoading] = useState(false);
+  const [phase, setPhase] = useState<"searching" | "answering">("searching");
   const [error, setError] = useState("");
+  const [incomplete, setIncomplete] = useState(false);
+  const active = useRef<BrowserRequest | null>(null);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      const run = active.current;
+      run?.controller.abort();
+      if (run?.paintFrame !== undefined) cancelAnimationFrame(run.paintFrame);
+    };
+  }, []);
+
+  useEffect(() => {
+    const run = active.current;
+    if (!answer || !run || run.firstTextMs !== undefined || run.paintFrame !== undefined) return;
+    // The effect runs after the text is committed. The next frame approximates
+    // its presentation, rather than measuring only the network chunk arrival.
+    run.paintFrame = requestAnimationFrame(() => {
+      run.paintFrame = undefined;
+      if (!mounted.current || active.current !== run) return;
+      run.firstTextMs = performance.now() - run.startedAt;
+      logTiming({ phase: "first_text", requestId: run.requestId, firstTextMs: run.firstTextMs });
+    });
+  }, [answer]);
 
   async function askQuestion() {
-    if (!question.trim() || loading) return;
-
+    if (!question.trim() || active.current && !active.current.settled) return;
+    // A pending first-paint measurement belongs to the old answer. Only
+    // replacement/unmount cancels it; incoming deltas must not postpone it.
+    if (active.current?.paintFrame !== undefined) cancelAnimationFrame(active.current.paintFrame);
+    const run: BrowserRequest = {
+      controller: new AbortController(), startedAt: performance.now(), requestId: null,
+    };
+    active.current = run;
+    const current = () => mounted.current && active.current === run;
+    let outcome = "failure";
     setLoading(true);
+    setPhase("searching");
     setError("");
     setAnswer("");
     setCitations([]);
+    setIncomplete(false);
 
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
         body: JSON.stringify({ question: question.trim() }),
+        signal: run.controller.signal,
       });
-
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || "Request failed");
+      run.requestId = response.headers.get("X-Request-ID");
+      if (!response.ok) throw new Error("Chat failed. Please try again.");
+      if (response.headers.get("Content-Type")?.toLowerCase().includes("text/event-stream")) {
+        if (!response.body) throw new Error("No answer stream was received.");
+        await consumeChatStream(response.body, (event) => {
+          if (!current()) return;
+          if (event.type === "sources") {
+            setCitations(event.citations);
+            setPhase("answering");
+          } else if (event.type === "delta") {
+            setAnswer(previous => previous + event.text);
+          }
+        }, run.controller.signal);
+      } else {
+        const data = await response.json();
+        if (!data.success || typeof data.answer !== "string") throw new Error("Chat failed. Please try again.");
+        if (current()) {
+          setPhase("answering");
+          setAnswer(data.answer);
+          setCitations(Array.isArray(data.citations) ? data.citations : []);
+        }
       }
-
-      setAnswer(data.answer);
-      setCitations(data.citations ?? []);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Something went wrong"
-      );
+      if (run.controller.signal.aborted) throw new DOMException("Request cancelled", "AbortError");
+      outcome = "success";
+    } catch {
+      outcome = run.controller.signal.aborted ? "cancelled" : "failure";
+      if (current()) {
+        setIncomplete(true);
+        setError(outcome === "cancelled" ? "Stopped. The answer is incomplete." : "The answer was interrupted. Please try again.");
+      }
     } finally {
-      setLoading(false);
+      run.settled = true;
+      logTiming({ phase: "completed", requestId: run.requestId, firstTextMs: run.firstTextMs,
+        durationMs: performance.now() - run.startedAt, outcome });
+      if (current()) setLoading(false);
     }
   }
 
@@ -68,6 +135,7 @@ export default function Home() {
         <textarea
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
+          aria-label="Question"
           placeholder="Ask a question about your documents..."
           maxLength={2000}
           rows={4}
@@ -79,19 +147,25 @@ export default function Home() {
           disabled={loading || !question.trim()}
           className="rounded-lg bg-blue-600 px-6 py-3 font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 focus:ring-offset-white disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-400 dark:focus:ring-blue-400 dark:focus:ring-offset-slate-950"
         >
-          {loading ? "Searching..." : "Ask Question"}
+          {loading ? phase === "searching" ? "Searching..." : "Answering..." : "Ask Question"}
         </button>
+        {loading && (
+          <button type="button" onClick={() => active.current?.controller.abort()}
+            className="ml-3 rounded-lg border border-slate-300 px-6 py-3 font-medium hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 dark:border-slate-700 dark:hover:bg-slate-800">
+            Stop
+          </button>
+        )}
       </form>
 
       {error && (
-        <p role="alert" className="mt-6 text-red-700 dark:text-red-400">
+        <p role="status" className="mt-6 text-slate-600 dark:text-slate-300">
           {error}
         </p>
       )}
 
       {answer && (
         <section className="mt-10 space-y-4">
-          <h2 className="text-xl font-semibold">Answer</h2>
+          <h2 className="text-xl font-semibold">Answer{incomplete ? " (incomplete)" : ""}</h2>
           <p className="whitespace-pre-wrap">{answer}</p>
 
           {citations.length > 0 && (

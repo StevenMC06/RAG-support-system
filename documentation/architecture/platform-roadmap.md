@@ -23,12 +23,15 @@ space requires compatible query embeddings and corpus reindexing.
 
 1. Request/call IDs and stage timing: implemented; see
    [request timing](../operations/request-timing.md).
-2. Managed tracing: Langfuse Cloud is recommended, not provisioned or selected
+2. Streaming answers and first-text/token-usage timing: implemented; see
+   [streaming chat](../operations/streaming-chat.md). This improves incremental
+   delivery without claiming faster total generation.
+3. Managed tracing: Langfuse Cloud is recommended, not provisioned or selected
    irrevocably. Measure baseline vector retrieval and response latency first.
-3. PostgreSQL keyword retrieval, tested independently against prepared data.
-4. Proposed hybrid retrieval: keyword + pgvector candidates fused by RRF.
+4. PostgreSQL keyword retrieval, tested independently against prepared data.
+5. Proposed hybrid retrieval: keyword + pgvector candidates fused by RRF.
    Compare quality and p50/p95 latency against vector-only before defaulting to it.
-5. Optional reranking experiment after measurement. Adopt only if quality gains
+6. Optional reranking experiment after measurement. Adopt only if quality gains
    justify added model latency and cost. Routing/orchestration and more tools
    follow as separately scoped features.
 
