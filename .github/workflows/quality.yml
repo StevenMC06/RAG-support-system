@@ -16,6 +16,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npx prisma generate
       - run: npm run test:coverage
       - run: npm run lint
       - run: npm run build
+        env:
+          # S3 is initialized when route modules load; no AWS calls run at build time.
+          AWS_REGION: us-east-1

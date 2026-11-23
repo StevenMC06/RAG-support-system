@@ -87,7 +87,8 @@ change base images again, watch for the same symptom.
 Standard commands:
 
 ```bash
-npx prisma migrate dev      # apply migrations locally, generate client
+npx prisma generate         # generate client after npm ci or schema changes
+npx prisma migrate dev      # apply migrations locally
 npx prisma studio            # inspect data
 ```
 
@@ -101,6 +102,24 @@ npx prisma studio            # inspect data
 
 Never commit real values for these; see
 [ADR-017](../adr/017-env-vars-for-secrets.md).
+
+## Build checks and existing local container
+
+CI runs `npx prisma generate` after `npm ci`; the generated client is not
+committed. Generation does not require a running database. Model clients are
+initialized at call time, so production builds do not require OpenAI credentials.
+Actual embedding/answer calls still require `OPENAI_API_KEY` in the server
+environment. No production API key needs to be added to GitHub for build checks. The build
+step sets a nonsecret `AWS_REGION` placeholder because the existing S3 client
+is still initialized at module loading; no AWS credentials or calls are needed
+for the build.
+
+If Compose reports that `rag-postgres` already exists, inspect its port and
+volume before making changes. The existing local container was verified to use
+port 5433 and volume `rag-support-system_postgres_data`; it can be started with
+`docker start rag-postgres`. Check readiness with
+`docker exec rag-postgres pg_isready -U rag_user -d rag_support`. Do not remove
+the container or volume to resolve a name conflict without inspecting storage.
 
 ## Guardrails carried over from project history
 

@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { completionCreate, retrieveChunks } = vi.hoisted(() => ({
+const { completionCreate, retrieveChunks, construct } = vi.hoisted(() => ({
   completionCreate: vi.fn(),
+  construct: vi.fn(),
   retrieveChunks: vi.fn(),
 }));
 
 vi.mock("@/lib/retrieval", () => ({ retrieveChunks }));
 vi.mock("openai", () => ({
   default: class OpenAI {
+    constructor() { construct(); }
     chat = { completions: { create: completionCreate } };
   },
 }));
@@ -15,6 +17,22 @@ vi.mock("openai", () => ({
 import { POST } from "./route";
 
 describe("POST /api/chat", () => {
+  it("imports without credentials and handles generation initialization failures", async () => {
+    vi.resetModules();
+    construct.mockImplementation(() => { throw new Error("Missing credentials"); });
+    const { POST: imported } = await import("./route");
+    expect(construct).not.toHaveBeenCalled();
+    retrieveChunks.mockResolvedValue([
+      { id: 1, documentId: 4, chunkIndex: 3, content: "Context", distance: 0.04 },
+    ]);
+    const response = await imported(new Request("http://localhost/api/chat", {
+      method: "POST", body: JSON.stringify({ question: "Question" }),
+    }));
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ success: false, message: "Chat failed" });
+    expect(completionCreate).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => vi.resetAllMocks());
 
   it("rejects a malformed question before calling dependencies", async () => {

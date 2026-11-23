@@ -1,6 +1,6 @@
 # Request and call timing
 
-Last verified against repository: 2026-11-22 (source and automated tests).
+Last verified against repository: 2026-11-23 (source and automated tests).
 
 `POST /api/search` and `POST /api/chat` generate a fresh UUID request ID,
 returned in `X-Request-ID` on success, validation errors, and handled failures.
@@ -17,6 +17,15 @@ database retrieval, and answer generation. Model events include `provider` and
 `model`; successful provider request/response IDs are included when available.
 Embedding calls outside search/chat also emit events, but have an independent
 request ID when no trace context is supplied.
+
+Failed operations also include a fixed `errorCategory` and, when recognized,
+an allowlisted `errorCode`. Database connection failures are separated from
+query failures; provider authentication/rate limits, timeouts, and network
+failures have separate categories. Recognized nested Prisma/driver codes are
+inspected without logging raw metadata. Model failures may include
+`providerStatus` and a validated provider request ID. Unknown exceptions remain
+`unknown`; messages/stacks are deliberately excluded. Match the failed leaf
+operation to its enclosing request using `requestId`.
 
 Events include UTC `startedAt`/`endedAt`, monotonic `durationMs`, and a
 success/failure outcome. Request events include `httpStatus`; HTTP 4xx/5xx are

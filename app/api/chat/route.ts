@@ -3,8 +3,6 @@ import { timeRequest, timeOperation } from "@/lib/telemetry";
 import OpenAI from "openai";
 import { retrieveChunks } from "@/lib/retrieval";
 
-const openai = new OpenAI();
-
 export async function POST(request: Request) {
   return timeRequest("POST /api/chat", async (trace) => {
     try {
@@ -39,7 +37,7 @@ export async function POST(request: Request) {
         )
         .join("\n\n");
 
-      const response = await timeOperation(trace, { kind: "model", name: "answer.generate", provider: "openai", model: "gpt-4.1-mini" }, async () => openai.chat.completions.create({
+      const response = await timeOperation(trace, { kind: "model", name: "answer.generate", provider: "openai", model: "gpt-4.1-mini" }, async () => new OpenAI().chat.completions.create({
         model: "gpt-4.1-mini",
         temperature: 0,
         messages: [
