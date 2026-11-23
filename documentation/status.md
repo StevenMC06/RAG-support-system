@@ -1,5 +1,17 @@
 # Current status
 
+## Update: 2026-11-22
+
+Source inspection confirms embedding persistence, vector retrieval, and cited
+chat are implemented. Search/chat request and call timing is now implemented;
+see [request timing](operations/request-timing.md) and the
+[platform roadmap](architecture/platform-roadmap.md). These are code/test
+observations, not live provider/database verification. The older milestone and
+checklist below are historical and superseded where they conflict with this
+update. Ingestion still has duplicate vector writes and nontransactional
+replacement; hybrid search, managed tracing, reranking, and routing are planned.
+
+
 **Last verified against repository:** 2026-09-01 (this file replaces the
 living-status role of the archived `RAG_BACKEND_HANDOFF.md` — see
 [archive/](archive/) for its full original text and narrative detail this

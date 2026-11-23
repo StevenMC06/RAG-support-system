@@ -1,3 +1,4 @@
+import { timeOperation, type TraceContext } from "@/lib/telemetry";
 
 import { prisma } from "@/lib/prisma";
 import { createEmbeddings } from "@/lib/embeddings";
@@ -12,33 +13,36 @@ export type SearchResult = {
 
 export async function retrieveChunks(
   question: string,
-  limit = 5
+  limit = 5,
+  trace?: TraceContext
 ): Promise<SearchResult[]> {
-  const embeddings = await createEmbeddings([question]);
-  const queryEmbedding = embeddings[0];
+  return timeOperation(trace, { kind: "internal", name: "retrieval" }, async (retrievalTrace) => {
+    const embeddings = await createEmbeddings([question], retrievalTrace);
+    const queryEmbedding = embeddings[0];
 
-  if (
-    !queryEmbedding ||
-    queryEmbedding.length !== 1536 ||
-    !queryEmbedding.every(Number.isFinite)
-  ) {
-    throw new Error("Invalid query embedding");
-  }
+    if (
+      !queryEmbedding ||
+      queryEmbedding.length !== 1536 ||
+      !queryEmbedding.every(Number.isFinite)
+    ) {
+      throw new Error("Invalid query embedding");
+    }
 
-  const vector = `[${queryEmbedding.join(",")}]`;
-  const safeLimit = Math.max(1, Math.min(10, Math.floor(limit)));
+    const vector = `[${queryEmbedding.join(",")}]`;
+    const safeLimit = Math.max(1, Math.min(10, Math.floor(limit)));
 
-  return prisma.$queryRaw<SearchResult[]>`
-    SELECT
-      id,
-      "documentId",
-      "chunkIndex",
-      content,
-      (embedding <=> ${vector}::vector)::float8 AS distance
-    FROM "DocumentChunk"
-    WHERE embedding IS NOT NULL
-    ORDER BY embedding <=> ${vector}::vector
-    LIMIT ${safeLimit}
-  `;
+    return timeOperation(retrievalTrace, { kind: "internal", name: "retrieval.database" }, async () => prisma.$queryRaw<SearchResult[]>`
+      SELECT
+        id,
+        "documentId",
+        "chunkIndex",
+        content,
+        (embedding <=> ${vector}::vector)::float8 AS distance
+      FROM "DocumentChunk"
+      WHERE embedding IS NOT NULL
+      ORDER BY embedding <=> ${vector}::vector
+      LIMIT ${safeLimit}
+    `);
+  });
 }
 

@@ -21,6 +21,9 @@ documentation/
 
 **Start here depending on what you need:**
 
+- Planned local-first platform and feature sequence → [platform roadmap](architecture/platform-roadmap.md)
+- Implemented request/call IDs and timing → [request timing](operations/request-timing.md)
+
 - Understand the current state and what to do next → [status.md](status.md)
 - Understand how the system works → [architecture/system-overview.md](architecture/system-overview.md)
 - Run it locally → [operations/local-development.md](operations/local-development.md)
